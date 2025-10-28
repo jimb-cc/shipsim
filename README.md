@@ -87,6 +87,19 @@ python3 ship_simulator.py --mongodb-user myuser
 python3 ship_simulator.py --mongodb-user myuser --mongodb-password 'your_password'
 ```
 
+**Important:** If your MongoDB user was created in the `admin` database (common for admin users), you must specify the authentication database:
+
+```bash
+# User created in admin database
+python3 ship_simulator.py --mongodb-user myuser --mongodb-auth-db admin
+
+# With environment variable for password
+export MONGODB_PASSWORD='your_password'
+python3 ship_simulator.py --mongodb-user myuser --mongodb-auth-db admin
+```
+
+If you see an `Authentication failed` error, this is likely the issue. The simulator defaults to authenticating against the `shipsim` database, but many users authenticate against the `admin` database.
+
 ### MongoDB Command Line Options
 
 ```
@@ -179,6 +192,37 @@ db.ais.aggregate([
   { $group: { _id: "$mmsi", latest: { $first: "$$ROOT" } } }
 ])
 ```
+
+### Troubleshooting MongoDB Connection
+
+**Problem: "Authentication failed" error**
+
+Solution: Specify the authentication database with `--mongodb-auth-db`:
+
+```bash
+# If your user is in the admin database
+python3 ship_simulator.py --mongodb-user youruser --mongodb-auth-db admin
+```
+
+**Problem: No data appearing in MongoDB**
+
+1. Check that you see these messages when running the simulator:
+   - `✓ Connected to MongoDB at localhost:27017`
+   - `✓ Created geospatial index on shipsim.ais.location`
+   - `✓ Stored X messages to MongoDB` (appears when you stop with Ctrl+C)
+
+2. Verify data is being written:
+   ```bash
+   mongosh --username youruser --password yourpass --authenticationDatabase admin
+   use shipsim
+   db.ais.countDocuments()
+   db.ais.findOne()
+   ```
+
+3. Check MongoDB logs for errors:
+   ```bash
+   sudo tail -f /var/log/mongodb/mongod.log
+   ```
 
 ## Output Format
 
