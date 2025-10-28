@@ -306,6 +306,139 @@ class Ship:
         }
 
 
+class ShipNameGenerator:
+    """Generates realistic ship names with over 10,000 unique combinations."""
+
+    # Container ship prefixes and patterns
+    CONTAINER_PREFIXES = ['MSC', 'Maersk', 'Ever', 'COSCO', 'CMA CGM', 'Hapag-Lloyd', 'ONE',
+                          'Yang Ming', 'PIL', 'ZIM', 'Wan Hai', 'Evergreen']
+
+    # General cargo and bulk carrier patterns
+    CARGO_PREFIXES = ['Atlantic', 'Pacific', 'Nordic', 'Celtic', 'Baltic', 'Mediterranean',
+                      'Arctic', 'Antarctic', 'Tropical', 'Equatorial', 'Polar', 'Southern',
+                      'Northern', 'Eastern', 'Western', 'Central', 'Global', 'World',
+                      'Inter', 'Trans', 'Pan', 'Euro', 'Asian', 'African', 'American']
+
+    # Tanker patterns
+    TANKER_PREFIXES = ['Nordic', 'Celtic', 'Pacific', 'Atlantic', 'Arctic', 'Tropical',
+                       'Baltic', 'Mediterranean', 'Aegean', 'Adriatic', 'Caribbean',
+                       'Indian', 'Persian', 'Arabian', 'North Sea', 'Black Sea']
+    TANKER_TYPES = ['Spirit', 'Champion', 'Voyager', 'Navigator', 'Pioneer', 'Explorer',
+                    'Venture', 'Enterprise', 'Endeavor', 'Achievement', 'Progress',
+                    'Prosperity', 'Fortune', 'Destiny', 'Legacy', 'Heritage']
+
+    # General maritime words (greatly expanded)
+    MARITIME_WORDS = ['Ocean', 'Sea', 'Wave', 'Wind', 'Storm', 'Horizon', 'Venture',
+                      'Explorer', 'Trader', 'Voyager', 'Navigator', 'Discovery', 'Enterprise',
+                      'Freedom', 'Liberty', 'Victory', 'Glory', 'Pride', 'Spirit', 'Star',
+                      'Moon', 'Sun', 'Dawn', 'Dusk', 'Phoenix', 'Dragon', 'Eagle', 'Falcon',
+                      'Hawk', 'Osprey', 'Albatross', 'Seagull', 'Pelican', 'Cormorant',
+                      'Mariner', 'Seafarer', 'Sailor', 'Captain', 'Admiral', 'Skipper',
+                      'Anchor', 'Compass', 'Helm', 'Beacon', 'Lighthouse', 'Harbor',
+                      'Bay', 'Cove', 'Reef', 'Tide', 'Current', 'Drift', 'Flow',
+                      'Breeze', 'Gale', 'Tempest', 'Squall', 'Thunder', 'Lightning',
+                      'Rainbow', 'Sunset', 'Sunrise', 'Twilight', 'Midnight', 'Daybreak',
+                      'Quest', 'Journey', 'Expedition', 'Passage', 'Crossing', 'Route',
+                      'Path', 'Way', 'Trail', 'Course', 'Destiny', 'Fortune', 'Luck',
+                      'Treasure', 'Pearl', 'Diamond', 'Sapphire', 'Emerald', 'Ruby',
+                      'Gold', 'Silver', 'Bronze', 'Platinum', 'Crystal', 'Jewel',
+                      'Crown', 'Scepter', 'Throne', 'Empire', 'Kingdom', 'Realm',
+                      'Legend', 'Myth', 'Hero', 'Champion', 'Warrior', 'Guardian',
+                      'Sentinel', 'Protector', 'Defender', 'Shield', 'Sword', 'Lance']
+
+    # City and place names for ships (greatly expanded)
+    PLACES = ['Rotterdam', 'Singapore', 'Hamburg', 'Shanghai', 'Busan', 'Antwerp',
+              'Los Angeles', 'Tokyo', 'Hong Kong', 'Dubai', 'London', 'Bremen',
+              'Yokohama', 'Qingdao', 'Kaohsiung', 'Valencia', 'Seattle', 'Boston',
+              'New York', 'Miami', 'Houston', 'Baltimore', 'Oakland', 'Long Beach',
+              'Vancouver', 'Montreal', 'Toronto', 'Halifax', 'Churchill', 'Sydney',
+              'Melbourne', 'Brisbane', 'Perth', 'Adelaide', 'Auckland', 'Wellington',
+              'Copenhagen', 'Oslo', 'Stockholm', 'Helsinki', 'Reykjavik', 'Dublin',
+              'Edinburgh', 'Liverpool', 'Bristol', 'Plymouth', 'Southampton', 'Dover',
+              'Marseille', 'Le Havre', 'Bordeaux', 'Genoa', 'Venice', 'Naples',
+              'Barcelona', 'Bilbao', 'Lisbon', 'Porto', 'Athens', 'Piraeus',
+              'Istanbul', 'Izmir', 'Haifa', 'Alexandria', 'Cairo', 'Casablanca',
+              'Lagos', 'Durban', 'Cape Town', 'Mombasa', 'Mumbai', 'Kolkata',
+              'Chennai', 'Karachi', 'Bangkok', 'Manila', 'Jakarta', 'Surabaya',
+              'Ho Chi Minh', 'Hanoi', 'Seoul', 'Incheon', 'Taipei', 'Kobe',
+              'Nagoya', 'Fukuoka', 'Vladivostok', 'St Petersburg', 'Murmansk']
+
+    # Female names (traditional for ships) - expanded
+    FEMALE_NAMES = ['Alexandra', 'Isabella', 'Victoria', 'Elizabeth', 'Catherine',
+                    'Margaret', 'Eleanor', 'Caroline', 'Sophia', 'Charlotte', 'Aurora',
+                    'Diana', 'Helena', 'Marina', 'Oceana', 'Stella', 'Luna',
+                    'Anastasia', 'Beatrice', 'Cordelia', 'Delilah', 'Evangeline',
+                    'Francesca', 'Gabriella', 'Henrietta', 'Juliana', 'Katerina',
+                    'Leonora', 'Madeline', 'Natalia', 'Ophelia', 'Penelope',
+                    'Rosalind', 'Seraphina', 'Tatiana', 'Valentina', 'Wilhelmina',
+                    'Anastasia', 'Bianca', 'Cassandra', 'Desdemona', 'Esmeralda',
+                    'Fiona', 'Gwendolyn', 'Hermione', 'Isadora', 'Josephine']
+
+    # Numeric suffixes for additional variety
+    ROMAN_NUMERALS = ['II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X']
+    NUMERIC_SUFFIXES = list(range(2, 21))  # 2 through 20
+
+    # Directional words
+    DIRECTIONS = ['Northern', 'Southern', 'Eastern', 'Western', 'North', 'South', 'East', 'West']
+
+    # Compass points
+    COMPASS_POINTS = ['Star', 'Cross', 'Wind', 'Light', 'Sky', 'Point', 'Marker', 'Guide']
+
+    @staticmethod
+    def _maybe_add_suffix(name: str) -> str:
+        """Randomly add a numeric suffix to a ship name (20% chance)."""
+        if random.random() < 0.2:  # 20% chance to add suffix
+            if random.random() < 0.5:  # 50/50 between Roman and Arabic numerals
+                return f"{name} {random.choice(ShipNameGenerator.ROMAN_NUMERALS)}"
+            else:
+                return f"{name} {random.choice(ShipNameGenerator.NUMERIC_SUFFIXES)}"
+        return name
+
+    @staticmethod
+    def generate_name() -> str:
+        """Generate a random realistic ship name from over 10,000 unique combinations."""
+        # Define patterns with weights proportional to their pool sizes
+        # This ensures larger pools contribute more names and reduces collision rate
+        patterns_with_weights = [
+            # Weight 1044: Container ship pattern "MSC Tokyo" (12 × 87)
+            (lambda: f"{random.choice(ShipNameGenerator.CONTAINER_PREFIXES)} {random.choice(ShipNameGenerator.PLACES)}", 1044),
+
+            # Weight 2700: Cargo pattern "Atlantic Trader" (25 × 108)
+            (lambda: f"{random.choice(ShipNameGenerator.CARGO_PREFIXES)} {random.choice(ShipNameGenerator.MARITIME_WORDS)}", 2700),
+
+            # Weight 256: Tanker pattern "Nordic Spirit" (16 × 16)
+            (lambda: f"{random.choice(ShipNameGenerator.TANKER_PREFIXES)} {random.choice(ShipNameGenerator.TANKER_TYPES)}", 256),
+
+            # Weight 432: Simple pattern "Sea Explorer" (4 × 108)
+            (lambda: f"{random.choice(['Sea', 'Ocean', 'Pacific', 'Atlantic'])} {random.choice(ShipNameGenerator.MARITIME_WORDS)}", 432),
+
+            # Weight 47: Female name pattern
+            (lambda: random.choice(ShipNameGenerator.FEMALE_NAMES), 47),
+
+            # Weight 87: City-based pattern "Pride of Rotterdam"
+            (lambda: f"Pride of {random.choice(ShipNameGenerator.PLACES)}", 87),
+
+            # Weight 9396: Word of Place "Spirit of Tokyo" (108 × 87)
+            (lambda: f"{random.choice(ShipNameGenerator.MARITIME_WORDS)} of {random.choice(ShipNameGenerator.PLACES)}", 9396),
+
+            # Weight 64: Compass pattern "Northern Star" (8 × 8)
+            (lambda: f"{random.choice(ShipNameGenerator.DIRECTIONS)} {random.choice(ShipNameGenerator.COMPASS_POINTS)}", 64),
+
+            # Weight 9396: Place + Word "Tokyo Venture" (87 × 108)
+            (lambda: f"{random.choice(ShipNameGenerator.PLACES)} {random.choice(ShipNameGenerator.MARITIME_WORDS)}", 9396),
+        ]
+
+        # Extract patterns and weights
+        patterns = [p[0] for p in patterns_with_weights]
+        weights = [p[1] for p in patterns_with_weights]
+
+        # Choose pattern with weighted probability
+        base_name = random.choices(patterns, weights=weights, k=1)[0]()
+
+        # Sometimes add numeric suffix to multiply combinations further
+        return ShipNameGenerator._maybe_add_suffix(base_name)
+
+
 class ShipSimulator:
     """Manages multiple ships and generates AIS data streams."""
 
@@ -330,7 +463,7 @@ class ShipSimulator:
         for i in range(num_ships):
             # Generate random MMSI (9 digits, typically starts with country code)
             mmsi = 366000000 + random.randint(1000, 999999)
-            name = f"SHIP-{i+1:03d}"
+            name = ShipNameGenerator.generate_name()
 
             # Random position within radius
             angle = random.uniform(0, 2 * math.pi)
@@ -481,8 +614,8 @@ def main():
     parser.add_argument(
         '-r', '--radius',
         type=float,
-        default=50,
-        help='Spawning radius in nautical miles (default: 50)'
+        default=1,
+        help='Spawning radius in nautical miles (default: 1)'
     )
 
     # MongoDB arguments
