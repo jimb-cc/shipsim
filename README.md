@@ -4,17 +4,20 @@ A Python application that simulates the movements of ships at sea and produces a
 
 ## Features
 
-- Simulates 10-50 ships with realistic movement patterns
+- Simulates multiple ships with realistic movement patterns
 - Random walk movement model with configurable parameters
 - Generates AIS Position Reports (Message Types 1, 2, 3)
 - Outputs JSON format with decoded fields AND embedded NMEA !AIVDM sentences
 - Configurable simulation parameters (number of ships, location, update interval)
 - Real-time streaming output
+- **Optional MongoDB integration** for data storage with geospatial indexing
+- Realistic ship name generation (10,000+ unique combinations)
 
 ## Requirements
 
 - Python 3.6 or higher
-- No external dependencies (uses only Python standard library)
+- No external dependencies for basic usage (uses only Python standard library)
+- **Optional**: `pymongo` library for MongoDB support (`pip install pymongo`)
 
 ## Installation
 
@@ -28,23 +31,23 @@ chmod +x ship_simulator.py
 
 ### Basic Usage
 
-Run with default settings (20 ships in San Francisco Bay area):
+Run with default settings (20 ships in the Firth of Clyde, Scotland):
 
 ```bash
-python ship_simulator.py
+python3 ship_simulator.py
 ```
 
 ### Custom Configuration
 
 ```bash
 # Simulate 30 ships with 5-second updates
-python ship_simulator.py --num-ships 30 --interval 5
+python3 ship_simulator.py --num-ships 30 --interval 5
 
 # Run for 60 seconds in a specific location (New York Harbor)
-python ship_simulator.py --lat 40.7 --lon -74.0 --duration 60
+python3 ship_simulator.py --lat 40.7 --lon -74.0 --duration 60
 
 # Larger area with more ships
-python ship_simulator.py -n 50 -r 100 --lat 51.5 --lon 0.0
+python3 ship_simulator.py -n 50 -r 100 --lat 51.5 --lon 0.0
 ```
 
 ### Command Line Options
@@ -53,9 +56,128 @@ python ship_simulator.py -n 50 -r 100 --lat 51.5 --lon 0.0
 -n, --num-ships NUM    Number of ships to simulate (default: 20)
 -i, --interval SEC     Update interval in seconds (default: 10.0)
 -d, --duration SEC     Simulation duration in seconds (default: infinite)
---lat DEGREES          Center latitude (default: 37.8)
---lon DEGREES          Center longitude (default: -122.4)
--r, --radius NM        Spawning radius in nautical miles (default: 50)
+--lat DEGREES          Center latitude (default: 55.8)
+--lon DEGREES          Center longitude (default: -5.0)
+-r, --radius NM        Spawning radius in nautical miles (default: 1)
+```
+
+## MongoDB Integration
+
+The simulator can store AIS data directly to MongoDB with automatic geospatial indexing for location-based queries.
+
+### Requirements
+
+```bash
+pip install pymongo
+```
+
+### Basic MongoDB Usage
+
+To enable MongoDB storage, provide the `--mongodb-user` parameter:
+
+```bash
+# Will prompt for password
+python3 ship_simulator.py --mongodb-user myuser
+
+# Or set password via environment variable
+export MONGODB_PASSWORD='your_password'
+python3 ship_simulator.py --mongodb-user myuser
+
+# Or pass password on command line (less secure)
+python3 ship_simulator.py --mongodb-user myuser --mongodb-password 'your_password'
+```
+
+### MongoDB Command Line Options
+
+```
+--mongodb-host HOST           MongoDB host (default: localhost)
+--mongodb-port PORT           MongoDB port (default: 27017)
+--mongodb-database DB         Database name (default: shipsim)
+--mongodb-collection COLL     Collection name (default: ais)
+--mongodb-user USER           MongoDB username (required to enable MongoDB)
+--mongodb-password PASS       MongoDB password (optional, will prompt if not provided)
+--mongodb-auth-db DB          Authentication database (default: same as --mongodb-database)
+--no-stdout                   Disable console output (only write to MongoDB)
+```
+
+### MongoDB Examples
+
+```bash
+# Store to MongoDB while also displaying on console
+python3 ship_simulator.py --mongodb-user shipuser -n 50 -i 5
+
+# Store to MongoDB only (no console output)
+python3 ship_simulator.py --mongodb-user shipuser --no-stdout -n 100
+
+# Custom database and collection
+python3 ship_simulator.py \
+  --mongodb-user shipuser \
+  --mongodb-database vessel_tracking \
+  --mongodb-collection positions
+
+# Different MongoDB host
+python3 ship_simulator.py \
+  --mongodb-host mongodb.example.com \
+  --mongodb-port 27017 \
+  --mongodb-user shipuser
+```
+
+### MongoDB Data Structure
+
+Data is stored with GeoJSON location format for geospatial queries:
+
+```json
+{
+  "timestamp": "2025-10-28T12:34:56.789Z",
+  "message_type": 1,
+  "mmsi": 366123456,
+  "ship_name": "Atlantic Trader",
+  "location": {
+    "type": "Point",
+    "coordinates": [-122.387654, 37.825432]
+  },
+  "position": {
+    "latitude": 37.825432,
+    "longitude": -122.387654
+  },
+  "navigation": {
+    "status": 0,
+    "speed_knots": 12.3,
+    "course": 145.2,
+    "heading": 146.0
+  },
+  "nmea_sentence": "!AIVDM,1,1,,A,13HOI:0P0000VOHLCnHQKwvL05Ip,0*23"
+}
+```
+
+**Note:** The `location` field uses GeoJSON format with a 2dsphere index automatically created for efficient geospatial queries.
+
+### Querying MongoDB Data
+
+Example queries using MongoDB shell:
+
+```javascript
+// Find all ships within 10km of a point
+db.ais.find({
+  location: {
+    $near: {
+      $geometry: { type: "Point", coordinates: [-122.4, 37.8] },
+      $maxDistance: 10000
+    }
+  }
+})
+
+// Find ships by name
+db.ais.find({ ship_name: "Atlantic Trader" })
+
+// Find ships above 15 knots
+db.ais.find({ "navigation.speed_knots": { $gt: 15 } })
+
+// Get latest position for each ship
+db.ais.aggregate([
+  { $sort: { timestamp: -1 } },
+  { $group: { _id: "$mmsi", latest: { $first: "$$ROOT" } } }
+])
 ```
 
 ## Output Format
@@ -67,7 +189,11 @@ Each ship generates JSON messages with the following structure:
   "timestamp": "2025-10-28T12:34:56.789Z",
   "message_type": 1,
   "mmsi": 366123456,
-  "ship_name": "SHIP-001",
+  "ship_name": "MSC Singapore",
+  "location": {
+    "type": "Point",
+    "coordinates": [-122.387654, 37.825432]
+  },
   "position": {
     "latitude": 37.825432,
     "longitude": -122.387654
@@ -87,8 +213,9 @@ Each ship generates JSON messages with the following structure:
 - **timestamp**: UTC timestamp in ISO 8601 format
 - **message_type**: AIS message type (1, 2, or 3 for position reports)
 - **mmsi**: Maritime Mobile Service Identity (unique 9-digit ship identifier)
-- **ship_name**: Simulated ship name
-- **position**: Current latitude and longitude
+- **ship_name**: Realistic ship name (10,000+ unique combinations)
+- **location**: GeoJSON Point format with coordinates [longitude, latitude] for MongoDB geospatial indexing
+- **position**: Current latitude and longitude in standard format
 - **navigation**: Current navigation status, speed, course, and heading
 - **nmea_sentence**: Raw NMEA !AIVDM sentence (standard maritime format)
 
@@ -105,24 +232,27 @@ Each ship generates JSON messages with the following structure:
 ### Stream to File
 
 ```bash
-python ship_simulator.py -n 25 -i 5 > ais_data.json
+python3 ship_simulator.py -n 25 -i 5 > ais_data.json
 ```
 
 ### Run for Specific Duration
 
 ```bash
 # Generate 5 minutes of data with 3-second updates
-python ship_simulator.py --duration 300 --interval 3
+python3 ship_simulator.py --duration 300 --interval 3
 ```
 
 ### Pipe to Another Tool
 
 ```bash
 # Process AIS data with jq
-python ship_simulator.py -n 10 | jq '.position'
+python3 ship_simulator.py -n 10 | jq '.position'
 
-# Filter specific ships
-python ship_simulator.py | grep "SHIP-001"
+# Filter specific ships by name
+python3 ship_simulator.py | jq 'select(.ship_name == "MSC Tokyo")'
+
+# Extract only ship names and positions
+python3 ship_simulator.py | jq '{name: .ship_name, lat: .position.latitude, lon: .position.longitude}'
 ```
 
 ### Use in Python Scripts
