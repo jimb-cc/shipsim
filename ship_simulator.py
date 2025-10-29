@@ -138,49 +138,44 @@ class AISEncoder:
 class MongoDBHandler:
     """Handles MongoDB connection and data storage."""
 
-    def __init__(self, host: str = 'localhost', port: int = 27017,
-                 database: str = 'shipsim', collection: str = 'ais',
-                 username: Optional[str] = None, password: Optional[str] = None,
-                 auth_database: Optional[str] = None):
+    def __init__(self, connection_uri: str, collection: str = 'ais'):
         """
-        Initialize MongoDB connection.
+        Initialize MongoDB connection using a connection URI.
 
         Args:
-            host: MongoDB host
-            port: MongoDB port
-            database: Database name
-            collection: Collection name
-            username: MongoDB username (optional)
-            password: MongoDB password (optional)
-            auth_database: Authentication database (defaults to database if not specified)
+            connection_uri: MongoDB connection URI (e.g., mongodb://user:pass@host:port/database)
+            collection: Collection name for AIS data (default: 'ais')
+
+        Examples:
+            mongodb://localhost:27017/shipsim
+            mongodb://user:pass@localhost:27017/shipsim?authSource=admin
+            mongodb+srv://user:pass@cluster.mongodb.net/shipsim
         """
         if not PYMONGO_AVAILABLE:
             raise ImportError("pymongo is required for MongoDB support. Install with: pip install pymongo")
 
-        self.database_name = database
+        self.connection_uri = connection_uri
         self.collection_name = collection
 
-        # Build connection string
-        if username and password:
-            auth_db = auth_database if auth_database else database
-            connection_string = f"mongodb://{username}:{password}@{host}:{port}/?authSource={auth_db}"
-        else:
-            connection_string = f"mongodb://{host}:{port}/"
-
         try:
-            self.client = MongoClient(connection_string, serverSelectionTimeoutMS=5000)
+            self.client = MongoClient(connection_uri, serverSelectionTimeoutMS=5000)
             # Test connection
             self.client.admin.command('ping')
-            print(f"✓ Connected to MongoDB at {host}:{port}", file=sys.stderr)
 
-            self.db = self.client[database]
+            # Extract database name from URI
+            self.database_name = self.client.get_default_database().name
+            self.db = self.client.get_default_database()
             self.collection = self.db[collection]
+
+            print(f"✓ Connected to MongoDB database '{self.database_name}'", file=sys.stderr)
 
             # Create geospatial index on location field if it doesn't exist
             self._ensure_geospatial_index()
 
         except (ConnectionFailure, ServerSelectionTimeoutError) as e:
-            raise ConnectionError(f"Failed to connect to MongoDB at {host}:{port}: {e}")
+            raise ConnectionError(f"Failed to connect to MongoDB: {e}")
+        except Exception as e:
+            raise ConnectionError(f"Invalid MongoDB connection URI: {e}")
 
     def _ensure_geospatial_index(self):
         """Create a 2dsphere index on the location field for geospatial queries."""
@@ -217,6 +212,64 @@ class MongoDBHandler:
         """Close MongoDB connection."""
         if self.client:
             self.client.close()
+
+
+class ConfigManager:
+    """Manages simulator configuration stored in MongoDB."""
+
+    DEFAULT_CONFIG = {
+        'num_ships': 20,
+        'interval': 10.0,
+        'center_lat': 55.8,
+        'center_lon': -5.0,
+        'radius': 1.0,
+        'bounding_poly_name': 'firth_of_clyde',
+        'output_stdout': True
+    }
+
+    def __init__(self, db):
+        """
+        Initialize configuration manager.
+
+        Args:
+            db: MongoDB database instance
+        """
+        self.db = db
+        self.config_collection = db['config']
+
+    def load_config(self) -> Dict[str, Any]:
+        """
+        Load configuration from MongoDB. Creates default config if none exists.
+
+        Returns:
+            Dictionary containing configuration settings
+        """
+        # Try to find existing config
+        config = self.config_collection.find_one()
+
+        if config is None:
+            # Create default config
+            print("ℹ No configuration found, creating default config...", file=sys.stderr)
+            config = self.DEFAULT_CONFIG.copy()
+            self.config_collection.insert_one(config)
+            print("✓ Created default configuration in shipsim.config collection", file=sys.stderr)
+        else:
+            # Remove MongoDB _id field
+            if '_id' in config:
+                del config['_id']
+            print("✓ Loaded configuration from shipsim.config collection", file=sys.stderr)
+
+        return config
+
+    def update_config(self, updates: Dict[str, Any]) -> None:
+        """
+        Update configuration in MongoDB.
+
+        Args:
+            updates: Dictionary of configuration updates
+        """
+        self.config_collection.update_one({}, {'$set': updates}, upsert=True)
+        print(f"✓ Updated configuration: {', '.join(updates.keys())}", file=sys.stderr)
 
 
 class Ship:
@@ -600,157 +653,88 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(
-        description='AIS Ship Movement Simulator - Generates realistic ship tracking data'
+        description='AIS Ship Movement Simulator - Configuration stored in MongoDB',
+        epilog='All simulator settings (num_ships, interval, location, etc.) are stored in '
+               'the shipsim.config collection in MongoDB. Edit that document to change settings.'
     )
     parser.add_argument(
-        '-n', '--num-ships',
-        type=int,
-        default=20,
-        help='Number of ships to simulate (default: 20)'
+        '--mongodb-uri',
+        type=str,
+        default=None,
+        help='MongoDB connection URI (e.g., mongodb://user:pass@host:port/database). '
+             'Can also be set via MONGODB_URI environment variable. REQUIRED.'
     )
     parser.add_argument(
-        '-i', '--interval',
-        type=float,
-        default=10.0,
-        help='Update interval in seconds (default: 10.0)'
+        '--collection',
+        type=str,
+        default='ais',
+        help='Collection name for AIS data (default: ais)'
     )
     parser.add_argument(
         '-d', '--duration',
         type=float,
         default=None,
-        help='Simulation duration in seconds (default: infinite)'
-    )
-    parser.add_argument(
-        '--lat',
-        type=float,
-        default=55.8,
-        help='Center latitude (default: 55.8 - Firth of Clyde, Scotland)'
-    )
-    parser.add_argument(
-        '--lon',
-        type=float,
-        default=-5.0,
-        help='Center longitude (default: -5.0 - Firth of Clyde, Scotland)'
-    )
-    parser.add_argument(
-        '-r', '--radius',
-        type=float,
-        default=1,
-        help='Spawning radius in nautical miles (default: 1)'
-    )
-
-    # MongoDB arguments
-    parser.add_argument(
-        '--mongodb-host',
-        type=str,
-        default='localhost',
-        help='MongoDB host (default: localhost)'
-    )
-    parser.add_argument(
-        '--mongodb-port',
-        type=int,
-        default=27017,
-        help='MongoDB port (default: 27017)'
-    )
-    parser.add_argument(
-        '--mongodb-database',
-        type=str,
-        default='shipsim',
-        help='MongoDB database name (default: shipsim)'
-    )
-    parser.add_argument(
-        '--mongodb-collection',
-        type=str,
-        default='ais',
-        help='MongoDB collection name (default: ais)'
-    )
-    parser.add_argument(
-        '--mongodb-user',
-        type=str,
-        default=None,
-        help='MongoDB username (optional)'
-    )
-    parser.add_argument(
-        '--mongodb-password',
-        type=str,
-        default=None,
-        help='MongoDB password (optional)'
-    )
-    parser.add_argument(
-        '--mongodb-auth-db',
-        type=str,
-        default=None,
-        help='MongoDB authentication database (default: same as --mongodb-database)'
-    )
-    parser.add_argument(
-        '--no-stdout',
-        action='store_true',
-        help='Disable stdout output (only write to MongoDB)'
+        help='Simulation duration in seconds (default: infinite). '
+             'Other settings loaded from MongoDB config collection.'
     )
 
     args = parser.parse_args()
 
-    # Create MongoDB handler if credentials provided
-    mongodb_handler = None
-    if args.mongodb_user is not None:
-        # Get password from environment variable, command line, or prompt
-        mongodb_password = args.mongodb_password
+    # Get MongoDB URI from argument or environment variable
+    mongodb_uri = args.mongodb_uri or os.environ.get('MONGODB_URI')
 
-        if mongodb_password is None:
-            # Check environment variable
-            mongodb_password = os.environ.get('MONGODB_PASSWORD')
+    if not mongodb_uri:
+        print("Error: MongoDB connection URI is required.", file=sys.stderr)
+        print("Provide it via --mongodb-uri argument or MONGODB_URI environment variable.", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("Examples:", file=sys.stderr)
+        print("  Local:  mongodb://localhost:27017/shipsim", file=sys.stderr)
+        print("  Auth:   mongodb://user:pass@localhost:27017/shipsim?authSource=admin", file=sys.stderr)
+        print("  Atlas:  mongodb+srv://user:pass@cluster.mongodb.net/shipsim", file=sys.stderr)
+        sys.exit(1)
 
-        if mongodb_password is None:
-            # Prompt for password
-            try:
-                mongodb_password = getpass.getpass(f"MongoDB password for user '{args.mongodb_user}': ")
-            except (KeyboardInterrupt, EOFError):
-                print("\nPassword input cancelled", file=sys.stderr)
-                sys.exit(1)
+    # Connect to MongoDB
+    try:
+        mongodb_handler = MongoDBHandler(mongodb_uri, collection=args.collection)
+    except Exception as e:
+        print(f"Failed to connect to MongoDB: {e}", file=sys.stderr)
+        sys.exit(1)
 
-        if not mongodb_password:
-            print("Error: MongoDB password is required when using --mongodb-user", file=sys.stderr)
-            sys.exit(1)
+    # Load configuration from MongoDB
+    try:
+        config_manager = ConfigManager(mongodb_handler.db)
+        config = config_manager.load_config()
+    except Exception as e:
+        print(f"Failed to load configuration: {e}", file=sys.stderr)
+        mongodb_handler.close()
+        sys.exit(1)
 
-        try:
-            mongodb_handler = MongoDBHandler(
-                host=args.mongodb_host,
-                port=args.mongodb_port,
-                database=args.mongodb_database,
-                collection=args.mongodb_collection,
-                username=args.mongodb_user,
-                password=mongodb_password,
-                auth_database=args.mongodb_auth_db
-            )
-        except Exception as e:
-            print(f"Failed to connect to MongoDB: {e}", file=sys.stderr)
-            print("Continuing without MongoDB support...", file=sys.stderr)
-
-    # Create and run simulator
-    print(f"Starting AIS Ship Simulator with {args.num_ships} ships...", file=sys.stderr)
-    print(f"Center: ({args.lat}, {args.lon}), Radius: {args.radius} nm", file=sys.stderr)
-    print(f"Update interval: {args.interval}s", file=sys.stderr)
-    if mongodb_handler:
-        print(f"MongoDB: {args.mongodb_database}.{args.mongodb_collection}", file=sys.stderr)
+    # Display configuration
+    print("-" * 80, file=sys.stderr)
+    print(f"Starting AIS Ship Simulator with {config['num_ships']} ships...", file=sys.stderr)
+    print(f"Center: ({config['center_lat']}, {config['center_lon']}), Radius: {config['radius']} nm", file=sys.stderr)
+    print(f"Update interval: {config['interval']}s", file=sys.stderr)
+    print(f"Bounding polygon: {config.get('bounding_poly_name', 'none')}", file=sys.stderr)
+    print(f"MongoDB: {mongodb_handler.database_name}.{mongodb_handler.collection_name}", file=sys.stderr)
     print("-" * 80, file=sys.stderr)
 
+    # Create and run simulator
     simulator = ShipSimulator(
-        num_ships=args.num_ships,
-        center_lat=args.lat,
-        center_lon=args.lon,
-        radius_nm=args.radius,
+        num_ships=config['num_ships'],
+        center_lat=config['center_lat'],
+        center_lon=config['center_lon'],
+        radius_nm=config['radius'],
         mongodb_handler=mongodb_handler
     )
 
     try:
         simulator.stream(
-            interval=args.interval,
+            interval=config['interval'],
             duration=args.duration,
-            output_stdout=not args.no_stdout
+            output_stdout=config.get('output_stdout', True)
         )
     finally:
-        if mongodb_handler:
-            mongodb_handler.close()
+        mongodb_handler.close()
 
 
 if __name__ == '__main__':
