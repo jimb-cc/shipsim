@@ -8,20 +8,31 @@ A Python application that simulates the movements of ships at sea and produces a
 - Random walk movement model with configurable parameters
 - Generates AIS Position Reports (Message Types 1, 2, 3)
 - Outputs JSON format with decoded fields AND embedded NMEA !AIVDM sentences
-- Configurable simulation parameters (number of ships, location, update interval)
+- **GeoJSON polygon-based geofencing** with edge avoidance behavior
+- **MongoDB-stored configuration** for easy fleet management
+- Custom bounding polygons via geojson.io
 - Real-time streaming output
-- **Optional MongoDB integration** for data storage with geospatial indexing
+- **MongoDB integration** for data storage with geospatial indexing
 - Realistic ship name generation (10,000+ unique combinations)
+- Stationary ship behavior (anchored/moored vessels)
 
 ## Requirements
 
 - Python 3.6 or higher
-- No external dependencies for basic usage (uses only Python standard library)
-- **Optional**: `pymongo` library for MongoDB support (`pip install pymongo`)
+- `pymongo` library for MongoDB support
+- MongoDB instance (local, authenticated, or MongoDB Atlas)
 
 ## Installation
 
-No installation required! Just download the script and run it:
+1. Create a virtual environment and install dependencies:
+
+```bash
+python3 -m venv venv
+source venv/bin/activate  # On Linux/Mac
+pip install pymongo
+```
+
+2. Make the script executable:
 
 ```bash
 chmod +x ship_simulator.py
@@ -29,111 +40,177 @@ chmod +x ship_simulator.py
 
 ## Usage
 
-### Basic Usage
+### Quick Start
 
-Run with default settings (20 ships in the Firth of Clyde, Scotland):
+The simulator requires a MongoDB connection. On first run, it will automatically create:
+- Default configuration in `shipsim.config` collection
+- Default "firth_of_clyde" bounding polygon in `shipsim.bounding_poly` collection
+- 2dsphere geospatial index on the `shipsim.ais` collection
+
+Run with a local MongoDB instance:
 
 ```bash
-python3 ship_simulator.py
+# Using environment variable (recommended)
+export MONGODB_URI="mongodb://localhost:27017/shipsim"
+python ship_simulator.py
+
+# Or pass URI directly
+python ship_simulator.py --mongodb-uri "mongodb://localhost:27017/shipsim"
 ```
 
-### Custom Configuration
+Run with authentication:
 
 ```bash
-# Simulate 30 ships with 5-second updates
-python3 ship_simulator.py --num-ships 30 --interval 5
+# Local authenticated instance
+python ship_simulator.py --mongodb-uri "mongodb://username:password@localhost:27017/shipsim?authSource=admin"
 
-# Run for 60 seconds in a specific location (New York Harbor)
-python3 ship_simulator.py --lat 40.7 --lon -74.0 --duration 60
-
-# Larger area with more ships
-python3 ship_simulator.py -n 50 -r 100 --lat 51.5 --lon 0.0
+# MongoDB Atlas
+python ship_simulator.py --mongodb-uri "mongodb+srv://username:password@cluster.mongodb.net/shipsim"
 ```
 
 ### Command Line Options
 
 ```
--n, --num-ships NUM    Number of ships to simulate (default: 20)
--i, --interval SEC     Update interval in seconds (default: 10.0)
--d, --duration SEC     Simulation duration in seconds (default: infinite)
---lat DEGREES          Center latitude (default: 55.8)
---lon DEGREES          Center longitude (default: -5.0)
--r, --radius NM        Spawning radius in nautical miles (default: 1)
+--mongodb-uri URI        MongoDB connection string (can also use MONGODB_URI env var)
+--collection NAME        Collection name for AIS data (default: ais)
+-d, --duration SEC       Simulation duration in seconds (default: infinite)
 ```
+
+**All other configuration (number of ships, update interval, bounding polygon, etc.) is stored in the MongoDB `config` collection and can be modified there.**
+
+## Configuration
+
+All simulator configuration is stored in MongoDB's `shipsim.config` collection. The default configuration is:
+
+```json
+{
+  "num_ships": 20,
+  "interval": 10.0,
+  "bounding_poly_name": "firth_of_clyde",
+  "output_stdout": true
+}
+```
+
+To change configuration, update the document in MongoDB:
+
+```bash
+mongosh "mongodb://localhost:27017/shipsim"
+db.config.updateOne({}, {$set: {num_ships: 50, interval: 5.0}})
+```
+
+Or using MongoDB Compass, edit the configuration document directly.
+
+### Configuration Fields
+
+- **num_ships**: Number of ships to simulate (default: 20)
+- **interval**: Update interval in seconds (default: 10.0)
+- **bounding_poly_name**: Name of polygon from `bounding_poly` collection (default: "firth_of_clyde")
+- **output_stdout**: Whether to print AIS messages to console (default: true)
+
+## Creating Custom Bounding Polygons
+
+The simulator uses GeoJSON polygons to define where ships can operate. Ships spawn randomly within the polygon and automatically steer away from edges.
+
+### Using geojson.io to Create Polygons
+
+1. **Visit geojson.io**: Open [https://geojson.io/](https://geojson.io/) in your browser
+
+2. **Draw Your Polygon**:
+   - Zoom to your desired location on the map
+   - Click the polygon tool (pentagon icon) on the right
+   - Click around the map to define your boundary
+   - Close the polygon by clicking on the starting point
+   - The right panel shows the GeoJSON automatically
+
+3. **Add the Name Property**:
+   - In the right panel, locate the `"properties"` object
+   - Add a `"name"` field with your chosen identifier
+   - Example:
+   ```json
+   {
+     "type": "Feature",
+     "properties": {
+       "name": "new_york_harbor"
+     },
+     "geometry": {
+       "type": "Polygon",
+       "coordinates": [[...]]
+     }
+   }
+   ```
+
+4. **Wrap in FeatureCollection** (if not already):
+   - The polygon must be inside a FeatureCollection
+   - geojson.io usually does this automatically
+   - Format should be:
+   ```json
+   {
+     "type": "FeatureCollection",
+     "features": [
+       {
+         "type": "Feature",
+         "properties": {"name": "your_polygon_name"},
+         "geometry": {
+           "type": "Polygon",
+           "coordinates": [[...]]
+         }
+       }
+     ]
+   }
+   ```
+
+5. **Insert into MongoDB**:
+
+   **Option A: Using MongoDB Compass**
+   - Connect to your MongoDB instance
+   - Navigate to the `shipsim` database
+   - Open the `bounding_poly` collection
+   - Click "Add Data" → "Insert Document"
+   - Paste your GeoJSON (with the name property added)
+   - Click "Insert"
+
+   **Option B: Using mongosh**
+   ```bash
+   mongosh "mongodb://localhost:27017/shipsim"
+   db.bounding_poly.insertOne({
+     "type": "FeatureCollection",
+     "features": [{
+       "type": "Feature",
+       "properties": {"name": "new_york_harbor"},
+       "geometry": {
+         "type": "Polygon",
+         "coordinates": [
+           [
+             [-74.05, 40.70],
+             [-74.05, 40.75],
+             [-73.95, 40.75],
+             [-73.95, 40.70],
+             [-74.05, 40.70]
+           ]
+         ]
+       }
+     }]
+   })
+   ```
+
+6. **Update Configuration to Use Your Polygon**:
+   ```bash
+   db.config.updateOne({}, {$set: {bounding_poly_name: "new_york_harbor"}})
+   ```
+
+7. **Restart the Simulator**: The new polygon will be loaded automatically
+
+### Polygon Best Practices
+
+- **Close the polygon**: First and last coordinate must be identical
+- **Avoid self-intersections**: Polygon edges shouldn't cross
+- **Use reasonable sizes**: Very large polygons (>100nm) may have sparse ship distributions
+- **Coordinate order**: GeoJSON uses [longitude, latitude], not [latitude, longitude]
+- **Edge buffer**: Ships will stay at least 5-10nm from polygon edges when possible
 
 ## MongoDB Integration
 
-The simulator can store AIS data directly to MongoDB with automatic geospatial indexing for location-based queries.
-
-### Requirements
-
-```bash
-pip install pymongo
-```
-
-### Basic MongoDB Usage
-
-To enable MongoDB storage, provide the `--mongodb-user` parameter:
-
-```bash
-# Will prompt for password
-python3 ship_simulator.py --mongodb-user myuser
-
-# Or set password via environment variable
-export MONGODB_PASSWORD='your_password'
-python3 ship_simulator.py --mongodb-user myuser
-
-# Or pass password on command line (less secure)
-python3 ship_simulator.py --mongodb-user myuser --mongodb-password 'your_password'
-```
-
-**Important:** If your MongoDB user was created in the `admin` database (common for admin users), you must specify the authentication database:
-
-```bash
-# User created in admin database
-python3 ship_simulator.py --mongodb-user myuser --mongodb-auth-db admin
-
-# With environment variable for password
-export MONGODB_PASSWORD='your_password'
-python3 ship_simulator.py --mongodb-user myuser --mongodb-auth-db admin
-```
-
-If you see an `Authentication failed` error, this is likely the issue. The simulator defaults to authenticating against the `shipsim` database, but many users authenticate against the `admin` database.
-
-### MongoDB Command Line Options
-
-```
---mongodb-host HOST           MongoDB host (default: localhost)
---mongodb-port PORT           MongoDB port (default: 27017)
---mongodb-database DB         Database name (default: shipsim)
---mongodb-collection COLL     Collection name (default: ais)
---mongodb-user USER           MongoDB username (required to enable MongoDB)
---mongodb-password PASS       MongoDB password (optional, will prompt if not provided)
---mongodb-auth-db DB          Authentication database (default: same as --mongodb-database)
---no-stdout                   Disable console output (only write to MongoDB)
-```
-
-### MongoDB Examples
-
-```bash
-# Store to MongoDB while also displaying on console
-python3 ship_simulator.py --mongodb-user shipuser -n 50 -i 5
-
-# Store to MongoDB only (no console output)
-python3 ship_simulator.py --mongodb-user shipuser --no-stdout -n 100
-
-# Custom database and collection
-python3 ship_simulator.py \
-  --mongodb-user shipuser \
-  --mongodb-database vessel_tracking \
-  --mongodb-collection positions
-
-# Different MongoDB host
-python3 ship_simulator.py \
-  --mongodb-host mongodb.example.com \
-  --mongodb-port 27017 \
-  --mongodb-user shipuser
-```
+The simulator stores AIS data in MongoDB with automatic geospatial indexing.
 
 ### MongoDB Data Structure
 
@@ -189,28 +266,35 @@ db.ais.aggregate([
 ])
 ```
 
+### MongoDB Collections
+
+The simulator uses three collections:
+
+1. **ais**: Ship position data with geospatial index
+2. **config**: Simulator configuration (single document)
+3. **bounding_poly**: GeoJSON polygons defining simulation boundaries
+
 ### Troubleshooting MongoDB Connection
 
 **Problem: "Authentication failed" error**
 
-Solution: Specify the authentication database with `--mongodb-auth-db`:
+Solution: Include authentication database in your connection URI:
 
 ```bash
 # If your user is in the admin database
-python3 ship_simulator.py --mongodb-user youruser --mongodb-auth-db admin
+python ship_simulator.py --mongodb-uri "mongodb://username:password@localhost:27017/shipsim?authSource=admin"
 ```
 
 **Problem: No data appearing in MongoDB**
 
 1. Check that you see these messages when running the simulator:
-   - `✓ Connected to MongoDB at localhost:27017`
+   - `✓ Connected to MongoDB`
    - `✓ Created geospatial index on shipsim.ais.location`
    - `✓ Stored X messages to MongoDB` (appears when you stop with Ctrl+C)
 
 2. Verify data is being written:
    ```bash
-   mongosh --username youruser --password yourpass --authenticationDatabase admin
-   use shipsim
+   mongosh "mongodb://localhost:27017/shipsim"
    db.ais.countDocuments()
    db.ais.findOne()
    ```
@@ -219,6 +303,13 @@ python3 ship_simulator.py --mongodb-user youruser --mongodb-auth-db admin
    ```bash
    sudo tail -f /var/log/mongodb/mongod.log
    ```
+
+**Problem: Connection string issues**
+
+- Ensure the database name is in the path: `mongodb://host:port/database_name`
+- For authentication, add `?authSource=admin` or appropriate auth database
+- For Atlas, use the `mongodb+srv://` protocol
+- Check firewall rules if connecting to remote MongoDB
 
 ## Output Format
 
@@ -268,80 +359,135 @@ Note: Ships with "at anchor" or "moored" status remain stationary and report zer
 
 ## Examples
 
-### Stream to File
+### Run for Limited Time
+
+Generate data for a specific duration:
 
 ```bash
-python3 ship_simulator.py -n 25 -i 5 > ais_data.json
+# Run for 5 minutes
+export MONGODB_URI="mongodb://localhost:27017/shipsim"
+python ship_simulator.py --duration 300
 ```
 
-### Run for Specific Duration
+### Long-Running Simulation
+
+For production or long-term testing:
 
 ```bash
-# Generate 5 minutes of data with 3-second updates
-python3 ship_simulator.py --duration 300 --interval 3
+# Run indefinitely in background
+nohup python ship_simulator.py --mongodb-uri "mongodb://localhost:27017/shipsim" &
+
+# Monitor with tail
+tail -f nohup.out
 ```
 
-### Pipe to Another Tool
+### Querying Realtime Data with jq
+
+If `output_stdout` is true in config, you can pipe to jq:
 
 ```bash
-# Process AIS data with jq
-python3 ship_simulator.py -n 10 | jq '.location'
+# Show only locations
+python ship_simulator.py | jq '.location'
 
-# Filter specific ships by name
-python3 ship_simulator.py | jq 'select(.ship_name == "MSC Tokyo")'
+# Filter ships above 15 knots
+python ship_simulator.py | jq 'select(.navigation.speed_knots > 15)'
 
-# Extract only ship names and positions
-python3 ship_simulator.py | jq '{name: .ship_name, lon: .location.coordinates[0], lat: .location.coordinates[1]}'
+# Extract ship names and coordinates
+python ship_simulator.py | jq '{name: .ship_name, lon: .location.coordinates[0], lat: .location.coordinates[1]}'
 ```
 
-### Use in Python Scripts
+### Multiple Simulation Areas
 
-```python
-from ship_simulator import ShipSimulator
-import json
+Run multiple simulators for different regions:
 
-# Create simulator
-sim = ShipSimulator(num_ships=15, center_lat=40.7, center_lon=-74.0)
+```bash
+# Terminal 1: Firth of Clyde (default)
+python ship_simulator.py --mongodb-uri "mongodb://localhost:27017/shipsim" --collection firth_of_clyde
 
-# Get single snapshot of all ship positions
-messages = sim.generate_ais_messages()
-for msg in messages:
-    print(json.dumps(msg, indent=2))
+# Terminal 2: New York (after creating polygon and config)
+python ship_simulator.py --mongodb-uri "mongodb://localhost:27017/shipsim" --collection new_york
+```
 
-# Update positions and get new snapshot
-sim.update_all_ships(time_delta=10.0)
-messages = sim.generate_ais_messages()
+### Production Monitoring
+
+Check statistics:
+
+```bash
+# Count documents
+mongosh "mongodb://localhost:27017/shipsim"
+db.ais.countDocuments()
+
+# Recent ships
+db.ais.find().sort({timestamp: -1}).limit(10)
+
+# Ships by status
+db.ais.aggregate([
+  {$group: {_id: "$navigation.status", count: {$sum: 1}}},
+  {$sort: {count: -1}}
+])
 ```
 
 ## Architecture
 
-The simulator consists of three main components:
+The simulator consists of five main components:
 
 ### 1. Ship Class
-- Maintains ship state (position, heading, speed, MMSI)
-- Implements random walk movement model
+- Maintains ship state (position, heading, speed, MMSI, status)
+- Implements random walk movement model with geofencing
 - Generates realistic course and speed changes
-- Keeps ships within valid coordinate bounds
+- Applies edge avoidance when approaching polygon boundaries
+- Stationary behavior for anchored/moored vessels
 
-### 2. AISEncoder Class
+### 2. BoundingPolygon Class
+- Loads GeoJSON polygons from MongoDB
+- Point-in-polygon detection using ray casting algorithm
+- Random point generation within polygon boundaries
+- Distance-to-edge calculations
+- Heading suggestion for edge avoidance (distance-weighted blending)
+
+### 3. ConfigManager Class
+- Loads configuration from MongoDB
+- Auto-creates default configuration if not present
+- Manages bounding polygon loading and initialization
+- Falls back to embedded default "firth_of_clyde" polygon
+
+### 4. AISEncoder Class
 - Encodes ship data into AIS binary format
 - Converts to 6-bit ASCII payload
 - Generates NMEA !AIVDM sentences with checksums
 - Handles AIS Position Report messages (Types 1, 2, 3)
+- Maps text status strings to AIS status codes
 
-### 3. ShipSimulator Class
+### 5. ShipSimulator Class
 - Manages fleet of ships
 - Coordinates position updates
 - Generates AIS messages for all ships
 - Provides streaming output interface
+- Optional MongoDB storage with batched writes
 
 ## Movement Model
 
-Ships use a random walk algorithm:
+Ships use an enhanced random walk algorithm with geofencing:
+
+### Basic Movement
 - Heading changes randomly with occasional course adjustments (-5 to +5 degrees)
 - Speed varies realistically between 3 and 20 knots
 - Position updates based on speed and heading using spherical earth calculations
-- Ships stay within reasonable latitude bounds (-85 to 85 degrees)
+- 90% of ships are "under way using engine", 10% are stationary (anchored/moored)
+
+### Edge Avoidance
+- Ships detect when approaching polygon boundaries
+- Applies weighted steering correction based on distance:
+  - Within 5nm of edge: 70% correction toward center, 30% current heading
+  - Within 10nm of edge: 30% correction toward center, 70% current heading
+  - Beyond 10nm: No correction applied
+- Uses circular averaging to blend headings smoothly (handles 359°/0° wraparound)
+
+### Stationary Ships
+- Ships with "at anchor" or "moored" status remain stationary
+- Speed fixed at 0 knots
+- Position does not update
+- Heading remains constant
 
 ## Technical Notes
 
@@ -366,10 +512,44 @@ Where:
 - Latitude: -90 (South) to +90 (North)
 - Longitude: -180 (West) to +180 (East)
 - Distances calculated using nautical miles (1 nm = 1/60 degree latitude)
+- **Important**: GeoJSON uses [longitude, latitude] order, opposite of typical [lat, lon]
+
+### GeoJSON Format
+
+The simulator uses standard GeoJSON format with FeatureCollection:
+
+```json
+{
+  "type": "FeatureCollection",
+  "features": [{
+    "type": "Feature",
+    "properties": {"name": "polygon_name"},
+    "geometry": {
+      "type": "Polygon",
+      "coordinates": [
+        [
+          [lon1, lat1],
+          [lon2, lat2],
+          [lon3, lat3],
+          [lon1, lat1]  // Must close the polygon
+        ]
+      ]
+    }
+  }]
+}
+```
+
+Key requirements:
+- First and last coordinates must be identical (closed polygon)
+- Coordinate order is [longitude, latitude]
+- Multiple rings are supported (outer boundary + holes)
 
 ## Stopping the Simulator
 
-Press `Ctrl+C` to stop the simulation gracefully.
+Press `Ctrl+C` to stop the simulation gracefully. The simulator will:
+- Display statistics (messages generated, duration)
+- Flush any pending MongoDB writes
+- Close database connections cleanly
 
 ## License
 
@@ -379,8 +559,10 @@ This is a demonstration/educational tool. Use freely for testing and development
 
 Potential improvements:
 - More AIS message types (static data, voyage data)
-- Collision avoidance behavior
-- Port/harbor awareness
-- Weather effects on movement
-- AIS message variations based on ship type
-- Support for additional output formats (CSV, binary)
+- Collision avoidance behavior between ships
+- Port/harbor awareness and docking behavior
+- Weather effects on movement and speed
+- AIS message variations based on ship type (cargo, tanker, passenger)
+- Support for additional output formats (CSV, Parquet)
+- Web dashboard for realtime visualization
+- Docker containerization for easy deployment
