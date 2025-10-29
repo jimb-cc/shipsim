@@ -220,9 +220,6 @@ class ConfigManager:
     DEFAULT_CONFIG = {
         'num_ships': 20,
         'interval': 10.0,
-        'center_lat': 55.8,
-        'center_lon': -5.0,
-        'radius': 1.0,
         'bounding_poly_name': 'firth_of_clyde',
         'output_stdout': True
     }
@@ -271,6 +268,256 @@ class ConfigManager:
         self.config_collection.update_one({}, {'$set': updates}, upsert=True)
         print(f"✓ Updated configuration: {', '.join(updates.keys())}", file=sys.stderr)
 
+    def load_bounding_polygon(self, poly_name: str) -> BoundingPolygon:
+        """
+        Load bounding polygon from MongoDB. Creates default if none exists.
+
+        Args:
+            poly_name: Name of the bounding polygon to load
+
+        Returns:
+            BoundingPolygon instance
+        """
+        bounding_poly_collection = self.db['bounding_poly']
+
+        # Try to find polygon by name
+        poly_data = bounding_poly_collection.find_one({'features.0.properties.name': poly_name})
+
+        if poly_data is None:
+            # Create default firth_of_clyde polygon
+            print(f"ℹ Bounding polygon '{poly_name}' not found, creating default...", file=sys.stderr)
+            poly_data = BoundingPolygon.DEFAULT_FIRTH_OF_CLYDE.copy()
+
+            # Remove MongoDB _id if present
+            if '_id' in poly_data:
+                del poly_data['_id']
+
+            bounding_poly_collection.insert_one(poly_data)
+            print(f"✓ Created default '{poly_name}' bounding polygon in shipsim.bounding_poly collection", file=sys.stderr)
+        else:
+            # Remove MongoDB _id field
+            if '_id' in poly_data:
+                del poly_data['_id']
+            print(f"✓ Loaded bounding polygon '{poly_name}' from shipsim.bounding_poly collection", file=sys.stderr)
+
+        return BoundingPolygon(poly_data)
+
+
+class BoundingPolygon:
+    """Handles bounding polygon operations for ship movement constraints."""
+
+    # Default Firth of Clyde polygon (GeoJSON format)
+    DEFAULT_FIRTH_OF_CLYDE = {
+        "type": "FeatureCollection",
+        "features": [{
+            "type": "Feature",
+            "properties": {"name": "firth_of_clyde"},
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [[
+                    [-5.142558787211925, 55.664167385740114],
+                    [-5.109580384767611, 55.60465028578375],
+                    [-5.104803433485955, 55.58502189259784],
+                    [-5.048524903867076, 55.55250623965125],
+                    [-5.020974467321963, 55.4867277565601],
+                    [-5.104823622022849, 55.42695726389266],
+                    [-4.81853865097051, 55.39023505900053],
+                    [-4.785024460640926, 55.415438735237075],
+                    [-4.669060255408368, 55.460996604806894],
+                    [-4.6428960944349456, 55.498245452040976],
+                    [-4.707987421734714, 55.53870910672731],
+                    [-4.70288221959251, 55.58490235051741],
+                    [-4.785841754387462, 55.62095304123943],
+                    [-4.831788573657093, 55.62383566534581],
+                    [-4.8560382838281555, 55.64616881527766],
+                    [-4.895603600421936, 55.685401077170496],
+                    [-4.963247528791555, 55.70482267741721],
+                    [-5.041101861444275, 55.71273241511199],
+                    [-5.1368244015909, 55.697990251635815],
+                    [-5.142558787211925, 55.664167385740114]
+                ]]
+            }
+        }]
+    }
+
+    def __init__(self, polygon_data: Dict[str, Any]):
+        """
+        Initialize bounding polygon.
+
+        Args:
+            polygon_data: GeoJSON FeatureCollection with polygon
+        """
+        # Extract coordinates from GeoJSON structure
+        feature = polygon_data['features'][0]
+        self.name = feature['properties'].get('name', 'unknown')
+        self.coordinates = feature['geometry']['coordinates'][0]  # Outer ring
+
+        # Calculate bounding box for quick checks
+        lons = [coord[0] for coord in self.coordinates]
+        lats = [coord[1] for coord in self.coordinates]
+        self.min_lon, self.max_lon = min(lons), max(lons)
+        self.min_lat, self.max_lat = min(lats), max(lats)
+
+    def contains_point(self, lon: float, lat: float) -> bool:
+        """
+        Check if a point is inside the polygon using ray casting algorithm.
+
+        Args:
+            lon: Longitude
+            lat: Latitude
+
+        Returns:
+            True if point is inside polygon
+        """
+        # Quick bounding box check first
+        if not (self.min_lon <= lon <= self.max_lon and self.min_lat <= lat <= self.max_lat):
+            return False
+
+        # Ray casting algorithm
+        inside = False
+        n = len(self.coordinates)
+        p1_lon, p1_lat = self.coordinates[0]
+
+        for i in range(1, n + 1):
+            p2_lon, p2_lat = self.coordinates[i % n]
+
+            if lat > min(p1_lat, p2_lat):
+                if lat <= max(p1_lat, p2_lat):
+                    if lon <= max(p1_lon, p2_lon):
+                        if p1_lat != p2_lat:
+                            x_intersection = (lat - p1_lat) * (p2_lon - p1_lon) / (p2_lat - p1_lat) + p1_lon
+                        if p1_lon == p2_lon or lon <= x_intersection:
+                            inside = not inside
+
+            p1_lon, p1_lat = p2_lon, p2_lat
+
+        return inside
+
+    def random_point_inside(self) -> tuple:
+        """
+        Generate a random point inside the polygon.
+
+        Returns:
+            Tuple of (lon, lat)
+        """
+        # Use rejection sampling: generate random points in bounding box until one is inside
+        max_attempts = 1000
+        for _ in range(max_attempts):
+            lon = random.uniform(self.min_lon, self.max_lon)
+            lat = random.uniform(self.min_lat, self.max_lat)
+            if self.contains_point(lon, lat):
+                return (lon, lat)
+
+        # Fallback: return center of bounding box
+        return ((self.min_lon + self.max_lon) / 2, (self.min_lat + self.max_lat) / 2)
+
+    def distance_to_edge(self, lon: float, lat: float) -> float:
+        """
+        Calculate approximate distance from point to nearest polygon edge.
+
+        Args:
+            lon: Longitude
+            lat: Latitude
+
+        Returns:
+            Distance in nautical miles (approximate)
+        """
+        min_distance = float('inf')
+
+        # Check distance to each edge
+        for i in range(len(self.coordinates) - 1):
+            p1_lon, p1_lat = self.coordinates[i]
+            p2_lon, p2_lat = self.coordinates[i + 1]
+
+            # Calculate perpendicular distance to line segment
+            # Simplified calculation using Euclidean distance in degrees
+            # (Good enough for small areas, not accurate for large distances)
+            dist = self._point_to_segment_distance(lon, lat, p1_lon, p1_lat, p2_lon, p2_lat)
+            min_distance = min(min_distance, dist)
+
+        # Convert degrees to nautical miles (1 degree latitude ≈ 60 nm)
+        return min_distance * 60.0
+
+    def _point_to_segment_distance(self, px: float, py: float,
+                                   x1: float, y1: float, x2: float, y2: float) -> float:
+        """Calculate distance from point to line segment."""
+        # Vector from p1 to p2
+        dx = x2 - x1
+        dy = y2 - y1
+
+        if dx == 0 and dy == 0:
+            # Segment is a point
+            return math.sqrt((px - x1)**2 + (py - y1)**2)
+
+        # Parameter t for closest point on line
+        t = max(0, min(1, ((px - x1) * dx + (py - y1) * dy) / (dx * dx + dy * dy)))
+
+        # Closest point on segment
+        closest_x = x1 + t * dx
+        closest_y = y1 + t * dy
+
+        # Distance to closest point
+        return math.sqrt((px - closest_x)**2 + (py - closest_y)**2)
+
+    def suggest_avoidance_heading(self, lon: float, lat: float, current_heading: float) -> float:
+        """
+        Suggest a heading adjustment to avoid polygon edges.
+
+        Args:
+            lon: Current longitude
+            lat: Current latitude
+            current_heading: Current heading in degrees
+
+        Returns:
+            Adjusted heading in degrees
+        """
+        # Find the nearest edge
+        min_distance = float('inf')
+        nearest_edge_idx = 0
+
+        for i in range(len(self.coordinates) - 1):
+            p1_lon, p1_lat = self.coordinates[i]
+            p2_lon, p2_lat = self.coordinates[i + 1]
+            dist = self._point_to_segment_distance(lon, lat, p1_lon, p1_lat, p2_lon, p2_lat)
+            if dist < min_distance:
+                min_distance = dist
+                nearest_edge_idx = i
+
+        # Calculate vector pointing away from nearest edge (toward polygon center)
+        center_lon = (self.min_lon + self.max_lon) / 2
+        center_lat = (self.min_lat + self.max_lat) / 2
+
+        # Vector from current position to center
+        to_center_lon = center_lon - lon
+        to_center_lat = center_lat - lat
+
+        # Convert to heading (0-360 degrees, 0=North)
+        avoidance_heading = (90 - math.degrees(math.atan2(to_center_lat, to_center_lon))) % 360
+
+        # Blend current heading with avoidance heading (weighted average)
+        # The closer to the edge, the more we steer toward center
+        edge_distance = self.distance_to_edge(lon, lat)
+        if edge_distance < 5:  # Within 5nm of edge
+            # Strong correction
+            weight = 0.7
+        elif edge_distance < 10:  # Within 10nm of edge
+            # Moderate correction
+            weight = 0.3
+        else:
+            # No correction needed
+            return current_heading
+
+        # Circular average of headings
+        current_rad = math.radians(current_heading)
+        avoidance_rad = math.radians(avoidance_heading)
+
+        avg_x = (1 - weight) * math.cos(current_rad) + weight * math.cos(avoidance_rad)
+        avg_y = (1 - weight) * math.sin(current_rad) + weight * math.sin(avoidance_rad)
+
+        adjusted_heading = (90 - math.degrees(math.atan2(avg_y, avg_x))) % 360
+
+        return adjusted_heading
+
 
 class Ship:
     """Represents a ship with position, heading, and movement behavior."""
@@ -286,6 +533,7 @@ class Ship:
     STATIONARY_STATUSES = {STATUS_AT_ANCHOR, STATUS_MOORED}
 
     def __init__(self, mmsi: int, name: str, lat: float, lon: float,
+                 bounding_polygon: Optional[BoundingPolygon] = None,
                  speed: float = None, heading: float = None):
         """
         Initialize a ship.
@@ -295,6 +543,7 @@ class Ship:
             name: Ship name
             lat: Initial latitude (-90 to 90)
             lon: Initial longitude (-180 to 180)
+            bounding_polygon: Optional bounding polygon for movement constraints
             speed: Initial speed in knots (random if None)
             heading: Initial heading in degrees (random if None)
         """
@@ -302,6 +551,7 @@ class Ship:
         self.name = name
         self.lat = lat
         self.lon = lon
+        self.bounding_polygon = bounding_polygon
         self.speed = speed if speed is not None else random.uniform(5, 15)
         self.heading = heading if heading is not None else random.uniform(0, 360)
 
@@ -320,6 +570,7 @@ class Ship:
         """
         Update ship position based on current heading and speed.
         Stationary ships (anchored or moored) do not move.
+        Ships with bounding polygons will steer to avoid edges.
 
         Args:
             time_delta: Time elapsed in seconds
@@ -339,6 +590,12 @@ class Ship:
         # Update heading (with random walk)
         self.heading += self.turn_rate * (time_delta / 10.0)
         self.heading = self.heading % 360
+
+        # Apply edge avoidance if bounding polygon is set
+        if self.bounding_polygon:
+            self.heading = self.bounding_polygon.suggest_avoidance_heading(
+                self.lon, self.lat, self.heading
+            )
 
         # Update speed (with random walk, keep between 3 and 20 knots)
         self.speed += self.speed_change * (time_delta / 10.0)
@@ -520,37 +777,37 @@ class ShipNameGenerator:
 class ShipSimulator:
     """Manages multiple ships and generates AIS data streams."""
 
-    def __init__(self, num_ships: int = 20, center_lat: float = 37.8,
-                 center_lon: float = -122.4, radius_nm: float = 50,
+    def __init__(self, num_ships: int = 20,
+                 bounding_polygon: Optional[BoundingPolygon] = None,
                  mongodb_handler: Optional[MongoDBHandler] = None):
         """
         Initialize the ship simulator.
 
         Args:
             num_ships: Number of ships to simulate
-            center_lat: Center latitude for ship spawning
-            center_lon: Center longitude for ship spawning
-            radius_nm: Radius in nautical miles for ship spawning area
+            bounding_polygon: Bounding polygon for ship movement constraints
             mongodb_handler: Optional MongoDB handler for data storage
         """
         self.ships: List[Ship] = []
         self.encoder = AISEncoder()
         self.mongodb_handler = mongodb_handler
+        self.bounding_polygon = bounding_polygon
 
-        # Generate ships with random positions around center point
+        # Generate ships with random positions within bounding polygon
         for i in range(num_ships):
             # Generate random MMSI (9 digits, typically starts with country code)
             mmsi = 366000000 + random.randint(1000, 999999)
             name = ShipNameGenerator.generate_name()
 
-            # Random position within radius
-            angle = random.uniform(0, 2 * math.pi)
-            distance = random.uniform(0, radius_nm) / 60.0  # Convert to degrees
+            # Random position within bounding polygon
+            if bounding_polygon:
+                lon, lat = bounding_polygon.random_point_inside()
+            else:
+                # Fallback: default center if no polygon
+                lat = 55.8
+                lon = -5.0
 
-            lat = center_lat + distance * math.cos(angle)
-            lon = center_lon + distance * math.sin(angle) / math.cos(math.radians(center_lat))
-
-            ship = Ship(mmsi, name, lat, lon)
+            ship = Ship(mmsi, name, lat, lon, bounding_polygon=bounding_polygon)
             self.ships.append(ship)
 
     def update_all_ships(self, time_delta: float = 10.0):
@@ -709,21 +966,30 @@ def main():
         mongodb_handler.close()
         sys.exit(1)
 
+    # Load bounding polygon from MongoDB
+    try:
+        bounding_polygon = config_manager.load_bounding_polygon(
+            config.get('bounding_poly_name', 'firth_of_clyde')
+        )
+    except Exception as e:
+        print(f"Failed to load bounding polygon: {e}", file=sys.stderr)
+        mongodb_handler.close()
+        sys.exit(1)
+
     # Display configuration
     print("-" * 80, file=sys.stderr)
     print(f"Starting AIS Ship Simulator with {config['num_ships']} ships...", file=sys.stderr)
-    print(f"Center: ({config['center_lat']}, {config['center_lon']}), Radius: {config['radius']} nm", file=sys.stderr)
+    print(f"Bounding polygon: {bounding_polygon.name}", file=sys.stderr)
+    print(f"  Area: {bounding_polygon.min_lat:.4f} to {bounding_polygon.max_lat:.4f}°N, "
+          f"{bounding_polygon.min_lon:.4f} to {bounding_polygon.max_lon:.4f}°E", file=sys.stderr)
     print(f"Update interval: {config['interval']}s", file=sys.stderr)
-    print(f"Bounding polygon: {config.get('bounding_poly_name', 'none')}", file=sys.stderr)
     print(f"MongoDB: {mongodb_handler.database_name}.{mongodb_handler.collection_name}", file=sys.stderr)
     print("-" * 80, file=sys.stderr)
 
     # Create and run simulator
     simulator = ShipSimulator(
         num_ships=config['num_ships'],
-        center_lat=config['center_lat'],
-        center_lon=config['center_lon'],
-        radius_nm=config['radius'],
+        bounding_polygon=bounding_polygon,
         mongodb_handler=mongodb_handler
     )
 
