@@ -24,9 +24,34 @@ A Python application that simulates the movements of ships at sea and produces a
 
 ## Installation
 
-### Option 1: Docker (Recommended)
+### Option 1: Pre-built Docker Image (Easiest)
 
-The easiest way to run the simulator is with Docker:
+Run the simulator directly from Docker Hub without cloning the repository:
+
+```bash
+# With MongoDB Atlas (recommended for first-time users)
+docker run --rm \
+  -e MONGODB_URI="mongodb+srv://username:password@cluster.mongodb.net/shipsim" \
+  jimthree/shipsim:latest \
+  --duration 300
+
+# With local MongoDB
+docker run --rm \
+  -e MONGODB_URI="mongodb://host.docker.internal:27017/shipsim" \
+  jimthree/shipsim:latest
+
+# Run indefinitely in background
+docker run -d \
+  --name shipsim \
+  -e MONGODB_URI="mongodb+srv://username:password@cluster.mongodb.net/shipsim" \
+  jimthree/shipsim:latest
+```
+
+The simulator will automatically create default configuration and the "firth_of_clyde" bounding polygon in your MongoDB database on first run.
+
+### Option 2: Docker Compose (Full Stack)
+
+For a complete environment with MongoDB included:
 
 ```bash
 # Clone the repository
@@ -43,7 +68,7 @@ docker-compose logs -f simulator
 docker-compose down
 ```
 
-### Option 2: Local Python Installation
+### Option 3: Local Python Installation
 
 1. Create a virtual environment and install dependencies:
 
