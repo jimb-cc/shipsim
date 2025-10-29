@@ -268,7 +268,7 @@ class ConfigManager:
         self.config_collection.update_one({}, {'$set': updates}, upsert=True)
         print(f"✓ Updated configuration: {', '.join(updates.keys())}", file=sys.stderr)
 
-    def load_bounding_polygon(self, poly_name: str) -> BoundingPolygon:
+    def load_bounding_polygon(self, poly_name: str) -> 'BoundingPolygon':
         """
         Load bounding polygon from MongoDB. Creates default if none exists.
 
