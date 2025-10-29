@@ -24,6 +24,27 @@ A Python application that simulates the movements of ships at sea and produces a
 
 ## Installation
 
+### Option 1: Docker (Recommended)
+
+The easiest way to run the simulator is with Docker:
+
+```bash
+# Clone the repository
+git clone https://github.com/jimb-cc/shipsim.git
+cd shipsim
+
+# Start MongoDB and simulator with docker-compose
+docker-compose up -d
+
+# View logs
+docker-compose logs -f simulator
+
+# Stop the simulator
+docker-compose down
+```
+
+### Option 2: Local Python Installation
+
 1. Create a virtual environment and install dependencies:
 
 ```bash
@@ -427,6 +448,147 @@ db.ais.aggregate([
 ])
 ```
 
+## Docker Deployment
+
+### Quick Start with Docker Compose
+
+The included `docker-compose.yml` provides a complete environment with MongoDB:
+
+```bash
+# Start services
+docker-compose up -d
+
+# View realtime logs
+docker-compose logs -f simulator
+
+# Check MongoDB data
+docker-compose exec mongodb mongosh shipsim --eval "db.ais.countDocuments()"
+
+# Stop services
+docker-compose down
+
+# Stop and remove data volumes
+docker-compose down -v
+```
+
+### Build Docker Image Manually
+
+```bash
+# Build the image
+docker build -t shipsim:latest .
+
+# Run with external MongoDB
+docker run -d \
+  --name shipsim \
+  -e MONGODB_URI="mongodb://host.docker.internal:27017/shipsim" \
+  shipsim:latest
+
+# Run with limited duration
+docker run -d \
+  --name shipsim \
+  -e MONGODB_URI="mongodb://host.docker.internal:27017/shipsim" \
+  shipsim:latest \
+  --duration 3600
+
+# View logs
+docker logs -f shipsim
+
+# Stop container
+docker stop shipsim && docker rm shipsim
+```
+
+### Connect to External MongoDB
+
+#### Local MongoDB on Host
+
+```bash
+docker run -d \
+  --name shipsim \
+  -e MONGODB_URI="mongodb://host.docker.internal:27017/shipsim" \
+  shipsim:latest
+```
+
+#### Authenticated MongoDB
+
+```bash
+docker run -d \
+  --name shipsim \
+  -e MONGODB_URI="mongodb://username:password@host.docker.internal:27017/shipsim?authSource=admin" \
+  shipsim:latest
+```
+
+#### MongoDB Atlas
+
+```bash
+docker run -d \
+  --name shipsim \
+  -e MONGODB_URI="mongodb+srv://username:password@cluster.mongodb.net/shipsim" \
+  shipsim:latest
+```
+
+### Docker Compose with Custom Configuration
+
+Edit `docker-compose.yml` to customize:
+
+```yaml
+simulator:
+  build: .
+  environment:
+    - MONGODB_URI=mongodb://mongodb:27017/shipsim
+  command: ["--duration", "3600"]  # Run for 1 hour
+  restart: unless-stopped
+```
+
+### Production Deployment
+
+For production, consider:
+
+1. **Persistent storage**: The docker-compose file already includes a named volume for MongoDB data
+2. **Resource limits**: Add resource constraints to docker-compose.yml:
+   ```yaml
+   simulator:
+     deploy:
+       resources:
+         limits:
+           cpus: '1.0'
+           memory: 512M
+   ```
+3. **Monitoring**: Use `docker stats` to monitor resource usage
+4. **Logging**: Configure Docker logging driver for centralized logs
+5. **Health checks**: Add health check to ensure simulator is running
+
+### Troubleshooting Docker
+
+**Container exits immediately**:
+```bash
+# Check logs for errors
+docker logs shipsim
+
+# Common issues:
+# - MongoDB connection failed (check MONGODB_URI)
+# - Authentication errors (check credentials and authSource)
+```
+
+**Can't connect to host MongoDB**:
+- On Linux: Use `--network="host"` or the container IP
+- On Mac/Windows: Use `host.docker.internal` as the hostname
+- Check MongoDB is listening on 0.0.0.0, not just 127.0.0.1
+
+**MongoDB data persistence**:
+```bash
+# List volumes
+docker volume ls
+
+# Inspect volume
+docker volume inspect shipsim_mongodb_data
+
+# Backup volume
+docker run --rm -v shipsim_mongodb_data:/data -v $(pwd):/backup ubuntu tar czf /backup/mongodb-backup.tar.gz -C /data .
+
+# Restore volume
+docker run --rm -v shipsim_mongodb_data:/data -v $(pwd):/backup ubuntu tar xzf /backup/mongodb-backup.tar.gz -C /data
+```
+
 ## Architecture
 
 The simulator consists of five main components:
@@ -565,4 +727,4 @@ Potential improvements:
 - AIS message variations based on ship type (cargo, tanker, passenger)
 - Support for additional output formats (CSV, Parquet)
 - Web dashboard for realtime visualization
-- Docker containerization for easy deployment
+- Kubernetes deployment with Helm charts

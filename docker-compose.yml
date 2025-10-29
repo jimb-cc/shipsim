@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  mongodb:
+    image: mongo:7
+    container_name: shipsim-mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_DATABASE: shipsim
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - shipsim-network
+
+  simulator:
+    build: .
+    container_name: shipsim-app
+    restart: unless-stopped
+    depends_on:
+      - mongodb
+    environment:
+      - MONGODB_URI=mongodb://mongodb:27017/shipsim
+    networks:
+      - shipsim-network
+    # Uncomment to override configuration
+    # command: ["--duration", "3600"]
+
+networks:
+  shipsim-network:
+    driver: bridge
+
+volumes:
+  mongodb_data:

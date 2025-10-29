@@ -1,0 +1,29 @@
+# Git files
+.git
+.gitignore
+
+# Python artifacts
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Documentation and misc
+README.md
+setup_mongodb.js
+nohup.out
+*.log
