@@ -149,12 +149,8 @@ Data is stored with GeoJSON location format for geospatial queries:
     "type": "Point",
     "coordinates": [-122.387654, 37.825432]
   },
-  "position": {
-    "latitude": 37.825432,
-    "longitude": -122.387654
-  },
   "navigation": {
-    "status": 0,
+    "status": "under way using engine",
     "speed_knots": 12.3,
     "course": 145.2,
     "heading": 146.0
@@ -238,12 +234,8 @@ Each ship generates JSON messages with the following structure:
     "type": "Point",
     "coordinates": [-122.387654, 37.825432]
   },
-  "position": {
-    "latitude": 37.825432,
-    "longitude": -122.387654
-  },
   "navigation": {
-    "status": 0,
+    "status": "under way using engine",
     "speed_knots": 12.3,
     "course": 145.2,
     "heading": 146.0
@@ -258,18 +250,21 @@ Each ship generates JSON messages with the following structure:
 - **message_type**: AIS message type (1, 2, or 3 for position reports)
 - **mmsi**: Maritime Mobile Service Identity (unique 9-digit ship identifier)
 - **ship_name**: Realistic ship name (10,000+ unique combinations)
-- **location**: GeoJSON Point format with coordinates [longitude, latitude] for MongoDB geospatial indexing
-- **position**: Current latitude and longitude in standard format
+- **location**: GeoJSON Point format with coordinates [longitude, latitude]. Access coordinates as `location.coordinates[0]` (longitude) and `location.coordinates[1]` (latitude)
 - **navigation**: Current navigation status, speed, course, and heading
 - **nmea_sentence**: Raw NMEA !AIVDM sentence (standard maritime format)
 
-### Navigation Status Codes
+### Navigation Status Values
 
-- 0: Under way using engine
-- 1: At anchor
-- 2: Not under command
-- 3: Restricted maneuverability
-- 5: Moored
+The `navigation.status` field contains a text string describing the ship's current status:
+
+- **"under way using engine"**: Ship is moving under its own power
+- **"at anchor"**: Ship is anchored (stationary)
+- **"not under command"**: Ship is unable to maneuver
+- **"restricted maneuverability"**: Ship has limited ability to maneuver
+- **"moored"**: Ship is tied to a dock or mooring (stationary)
+
+Note: Ships with "at anchor" or "moored" status remain stationary and report zero speed.
 
 ## Examples
 
@@ -290,13 +285,13 @@ python3 ship_simulator.py --duration 300 --interval 3
 
 ```bash
 # Process AIS data with jq
-python3 ship_simulator.py -n 10 | jq '.position'
+python3 ship_simulator.py -n 10 | jq '.location'
 
 # Filter specific ships by name
 python3 ship_simulator.py | jq 'select(.ship_name == "MSC Tokyo")'
 
 # Extract only ship names and positions
-python3 ship_simulator.py | jq '{name: .ship_name, lat: .position.latitude, lon: .position.longitude}'
+python3 ship_simulator.py | jq '{name: .ship_name, lon: .location.coordinates[0], lat: .location.coordinates[1]}'
 ```
 
 ### Use in Python Scripts

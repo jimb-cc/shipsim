@@ -29,6 +29,15 @@ class AISEncoder:
     # AIS 6-bit ASCII encoding table
     PAYLOAD_ARMOR = "@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_ !\"#$%&'()*+,-./0123456789:;<=>?"
 
+    # Status text to AIS integer code mapping (for NMEA encoding)
+    STATUS_TO_CODE = {
+        "under way using engine": 0,
+        "at anchor": 1,
+        "not under command": 2,
+        "restricted maneuverability": 3,
+        "moored": 5
+    }
+
     @staticmethod
     def encode_sixbit(value: int, num_bits: int) -> str:
         """Encode an integer value to 6-bit ASCII string."""
@@ -52,7 +61,8 @@ class AISEncoder:
         msg_type = ship_data['message_type']  # 1, 2, or 3
         repeat = 0
         mmsi = ship_data['mmsi']
-        status = ship_data['status']
+        # Convert text status to integer code for NMEA encoding
+        status = AISEncoder.STATUS_TO_CODE.get(ship_data['status'], 0)
         turn = 0  # Rate of turn
         speed = int(ship_data['speed'] * 10)  # Speed in 0.1 knots
         accuracy = 1
@@ -212,12 +222,15 @@ class MongoDBHandler:
 class Ship:
     """Represents a ship with position, heading, and movement behavior."""
 
-    # Navigation status codes
-    STATUS_UNDER_WAY = 0
-    STATUS_AT_ANCHOR = 1
-    STATUS_NOT_UNDER_COMMAND = 2
-    STATUS_RESTRICTED_MANEUVERABILITY = 3
-    STATUS_MOORED = 5
+    # Navigation status text strings
+    STATUS_UNDER_WAY = "under way using engine"
+    STATUS_AT_ANCHOR = "at anchor"
+    STATUS_NOT_UNDER_COMMAND = "not under command"
+    STATUS_RESTRICTED_MANEUVERABILITY = "restricted maneuverability"
+    STATUS_MOORED = "moored"
+
+    # Stationary statuses - ships with these statuses should not move
+    STATIONARY_STATUSES = {STATUS_AT_ANCHOR, STATUS_MOORED}
 
     def __init__(self, mmsi: int, name: str, lat: float, lon: float,
                  speed: float = None, heading: float = None):
@@ -238,7 +251,13 @@ class Ship:
         self.lon = lon
         self.speed = speed if speed is not None else random.uniform(5, 15)
         self.heading = heading if heading is not None else random.uniform(0, 360)
-        self.status = self.STATUS_UNDER_WAY
+
+        # Randomly assign status (90% under way, 10% stationary)
+        if random.random() < 0.9:
+            self.status = self.STATUS_UNDER_WAY
+        else:
+            self.status = random.choice([self.STATUS_AT_ANCHOR, self.STATUS_MOORED])
+            self.speed = 0  # Stationary ships have zero speed
 
         # Movement parameters
         self.turn_rate = random.uniform(-3, 3)  # degrees per update
@@ -247,10 +266,16 @@ class Ship:
     def update_position(self, time_delta: float = 10.0):
         """
         Update ship position based on current heading and speed.
+        Stationary ships (anchored or moored) do not move.
 
         Args:
             time_delta: Time elapsed in seconds
         """
+        # Skip movement for stationary ships
+        if self.status in self.STATIONARY_STATUSES:
+            self.speed = 0  # Ensure speed stays at zero
+            return
+
         # Random walk: occasionally change heading and speed
         if random.random() < 0.1:  # 10% chance to change course
             self.turn_rate = random.uniform(-5, 5)
@@ -507,10 +532,6 @@ class ShipSimulator:
                 'location': {
                     'type': 'Point',
                     'coordinates': [round(ais_data['lon'], 6), round(ais_data['lat'], 6)]
-                },
-                'position': {
-                    'latitude': round(ais_data['lat'], 6),
-                    'longitude': round(ais_data['lon'], 6)
                 },
                 'navigation': {
                     'status': ais_data['status'],
